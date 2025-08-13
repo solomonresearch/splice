@@ -3,10 +3,11 @@
 
 package org.lfdecentralizedtrust.splice.setup
 
-import cats.implicits.{showInterpolator}
+import cats.implicits.showInterpolator
 import com.daml.nonempty.NonEmpty
 import com.digitalasset.canton.admin.api.client.data.{NodeStatus, WaitingForId}
-import com.digitalasset.canton.crypto.{SigningKeyUsage, SigningPublicKey}
+import com.digitalasset.canton.crypto.v30.PublicKey
+import com.digitalasset.canton.crypto.{EncryptionPublicKey, SigningKeyUsage, SigningPublicKey}
 import com.digitalasset.canton.logging.{NamedLoggerFactory, NamedLogging}
 import com.digitalasset.canton.topology.store.TopologyStoreId.AuthorizedStore
 import com.digitalasset.canton.topology.transaction.OwnerToKeyMapping
@@ -124,6 +125,8 @@ class NodeInitializer(
             logger.info(
               s"Node has identity $id, matching expected identifier $idenfitierName."
             )
+            // rotate existing keys that are not signed by owner
+            rotateOwnerToKeyMappingThatAreNotSignedByOwner(id, nodeIdentity)
             // fixes previously initialized nodes with messed up keys
             rotateSigningKeyIfSameAsNamespaceKey(id, nodeIdentity)
           } else {
@@ -186,6 +189,30 @@ class NodeInitializer(
       }
     } yield ()
   }
+
+  def rotateOwnerToKeyMappingThatAreNotSignedByOwner(
+      id: UniqueIdentifier,
+      nodeIdentity: UniqueIdentifier => Member & NodeIdentity,
+  )(implicit tc: TraceContext, ec: ExecutionContext): Future[Unit] =
+    for {
+      ownerToKeyMapping <- connection.listOwnerToKeyMapping(nodeIdentity(id))
+      _ = ownerToKeyMapping.map { otk =>
+        if (!otk.base.signedBy.contains(id.namespace.fingerprint)) {
+          val keys = otk.mapping.keys.map {
+            case key: SigningPublicKey => connection.generateKeyPair(key.keySpec.name, key.usage)
+            case key: EncryptionPublicKey => connection.generateEncryptionKeyPair(key.keySpec.name)
+          }.forgetNE
+          for {
+            newKeys <- Future.sequence(keys)
+            _ <- connection.ensureOwnerToKeyMapping(
+              member = nodeIdentity(id),
+              keys = NonEmpty.mk(Seq, newKeys),
+              retryFor = RetryFor.Automation,
+            )
+          } yield ()
+        }
+      }
+    } yield ()
 
   def initializeFromDumpAndWait(
       dump: NodeIdentitiesDump,
