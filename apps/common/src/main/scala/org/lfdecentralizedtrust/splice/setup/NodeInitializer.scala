@@ -209,7 +209,7 @@ class NodeInitializer(
               keys = NonEmpty.mk(Seq, newKeys),
               retryFor = RetryFor.Automation,
             )
-          } yield ()
+          } yield logger.info("Rotating OTK mapping keys, because owner did not sign the keys.")
         }
       }
     } yield ()
