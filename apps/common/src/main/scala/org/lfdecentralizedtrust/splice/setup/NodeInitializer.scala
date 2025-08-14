@@ -6,7 +6,7 @@ package org.lfdecentralizedtrust.splice.setup
 import cats.implicits.showInterpolator
 import com.daml.nonempty.NonEmpty
 import com.digitalasset.canton.admin.api.client.data.{NodeStatus, WaitingForId}
-import com.digitalasset.canton.crypto.{EncryptionPublicKey, SigningKeyUsage, SigningPublicKey}
+import com.digitalasset.canton.crypto.{SigningKeyUsage, SigningPublicKey}
 import com.digitalasset.canton.logging.{NamedLoggerFactory, NamedLogging}
 import com.digitalasset.canton.topology.store.TimeQuery
 import com.digitalasset.canton.topology.store.TopologyStoreId.AuthorizedStore
@@ -329,30 +329,37 @@ class NodeInitializer(
         nodeIdentity(id),
         TimeQuery.Range(None, None),
       )
-      // the latest keys must sign the previous OTKs
-//      latestKeys = ownerToKeyMappingHistory
-//        .sortBy(_.base.serial)
-//        .lastOption
-//        .getOrElse(throw new IllegalStateException("ownerToKeyMappingHistory is empty."))
-//        .mapping
-//        .keys
-//        .forgetNE
+      latestKeys = ownerToKeyMappingHistory
+        .sortBy(_.base.serial)
+        .lastOption
+        .getOrElse(throw new IllegalStateException("ownerToKeyMappingHistory is empty."))
+        .mapping
+        .keys
+        .filter {
+          case _: SigningPublicKey => true
+          case _ => false
+        }
       _ = ownerToKeyMappingHistory.map { otk =>
-        // keep keys that have signed the OTK transaction
-        val keysToKeep =
-          otk.mapping.keys.filter(k => otk.base.signedBy.contains(k.id))
+        val toRotate = otk.base.signedBy.diff(latestKeys.map(_.id))
+        val toKeep = otk.base.signedBy.diff(toRotate)
         // rotate keys that have not signed the OTK transaction
         val keysToRotate =
-          otk.mapping.keys.filterNot(k => otk.base.signedBy.contains(k.id))
-        // if latestKeys have not signed the OTK transaction or keysToRotate is not empty,
-        // overwrite the OTK with distinct latestKeys, keysToKeep and the new rotatedKeys.
-        // these keys are going to sign the new OTK transaction and discard the faulty old one.
+          otk.mapping.keys.filter {
+            case k: SigningPublicKey => toRotate.contains(k.id)
+            case _ => false
+          }
+        // keep keys that have signed the OTK transaction
+        val keysToKeep =
+          otk.mapping.keys.filter {
+            case k: SigningPublicKey => toKeep.contains(k.id)
+            case _ => true
+          }
+        logger.info(s"keysToKeep: ${keysToKeep}")
         if (keysToRotate.nonEmpty) {
+          logger.info(s"keyToRotate: ${keysToRotate}")
           val newKeys = keysToRotate.flatMap {
             case key: SigningPublicKey =>
               Some(connection.generateKeyPair(key.keySpec.name, key.usage))
-            case key: EncryptionPublicKey =>
-              Some(connection.generateEncryptionKeyPair(key.keySpec.name))
             case _ => None
           }
           for {
