@@ -330,13 +330,13 @@ class NodeInitializer(
         TimeQuery.Range(None, None),
       )
       // the latest keys must sign the previous OTKs
-      latestKeys = ownerToKeyMappingHistory
-        .sortBy(_.base.serial)
-        .lastOption
-        .getOrElse(throw new IllegalStateException("ownerToKeyMappingHistory is empty."))
-        .mapping
-        .keys
-        .forgetNE
+//      latestKeys = ownerToKeyMappingHistory
+//        .sortBy(_.base.serial)
+//        .lastOption
+//        .getOrElse(throw new IllegalStateException("ownerToKeyMappingHistory is empty."))
+//        .mapping
+//        .keys
+//        .forgetNE
       _ = ownerToKeyMappingHistory.map { otk =>
         // keep keys that have signed the OTK transaction
         val keysToKeep =
@@ -347,7 +347,7 @@ class NodeInitializer(
         // if latestKeys have not signed the OTK transaction or keysToRotate is not empty,
         // overwrite the OTK with distinct latestKeys, keysToKeep and the new rotatedKeys.
         // these keys are going to sign the new OTK transaction and discard the faulty old one.
-        if (latestKeys.diff(keysToKeep).nonEmpty || keysToRotate.nonEmpty) {
+        if (keysToRotate.nonEmpty) {
           val newKeys = keysToRotate.flatMap {
             case key: SigningPublicKey =>
               Some(connection.generateKeyPair(key.keySpec.name, key.usage))
@@ -357,7 +357,7 @@ class NodeInitializer(
           }
           for {
             rotatedKeys <- Future.sequence(newKeys)
-            allKeys = (latestKeys ++ keysToKeep ++ rotatedKeys).distinct
+            allKeys = (keysToKeep ++ rotatedKeys).distinct
             _ <- connection.ensureOwnerToKeyMapping(
               member = nodeIdentity(id),
               keys = NonEmpty.mk(
