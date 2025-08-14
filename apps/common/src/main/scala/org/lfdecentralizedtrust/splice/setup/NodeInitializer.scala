@@ -6,7 +6,6 @@ package org.lfdecentralizedtrust.splice.setup
 import cats.implicits.showInterpolator
 import com.daml.nonempty.NonEmpty
 import com.digitalasset.canton.admin.api.client.data.{NodeStatus, WaitingForId}
-import com.digitalasset.canton.crypto.v30.PublicKey
 import com.digitalasset.canton.crypto.{EncryptionPublicKey, SigningKeyUsage, SigningPublicKey}
 import com.digitalasset.canton.logging.{NamedLoggerFactory, NamedLogging}
 import com.digitalasset.canton.topology.store.TopologyStoreId.AuthorizedStore
@@ -125,10 +124,12 @@ class NodeInitializer(
             logger.info(
               s"Node has identity $id, matching expected identifier $idenfitierName."
             )
-            // rotate existing keys that are not signed by owner
-            rotateOwnerToKeyMappingThatAreNotSignedByOwner(id, nodeIdentity)
-            // fixes previously initialized nodes with messed up keys
-            rotateSigningKeyIfSameAsNamespaceKey(id, nodeIdentity)
+            for {
+              // rotate existing keys that are not signed by owner
+              _ <- rotateOwnerToKeyMappingThatAreNotSignedByOwner(id, nodeIdentity)
+              // fixes previously initialized nodes with messed up keys
+              _ <- rotateSigningKeyIfSameAsNamespaceKey(id, nodeIdentity)
+            } yield ()
           } else {
             logger.error(
               s"Node has identity $id, but identifier $idenfitierName was expected."
@@ -199,14 +200,21 @@ class NodeInitializer(
       _ = ownerToKeyMapping.map { otk =>
         if (!otk.base.signedBy.contains(id.namespace.fingerprint)) {
           val keys = otk.mapping.keys.map {
-            case key: SigningPublicKey => connection.generateKeyPair(key.keySpec.name, key.usage)
-            case key: EncryptionPublicKey => connection.generateEncryptionKeyPair(key.keySpec.name)
-          }.forgetNE
+            case key: SigningPublicKey =>
+              Some(connection.generateKeyPair(key.keySpec.name, key.usage))
+            case key: EncryptionPublicKey =>
+              Some(connection.generateEncryptionKeyPair(key.keySpec.name))
+            case _ => None
+          }.flatten
           for {
             newKeys <- Future.sequence(keys)
             _ <- connection.ensureOwnerToKeyMapping(
               member = nodeIdentity(id),
-              keys = NonEmpty.mk(Seq, newKeys),
+              keys = NonEmpty.mk(
+                Seq,
+                newKeys.headOption.getOrElse(throw new IllegalArgumentException("")),
+                newKeys.drop(1)*
+              ),
               retryFor = RetryFor.Automation,
             )
           } yield logger.info("Rotating OTK mapping keys, because owner did not sign the keys.")
