@@ -438,7 +438,6 @@ abstract class TopologyAdminConnection(
       member: Member,
       keys: NonEmpty[Seq[PublicKey]],
       retryFor: RetryFor,
-      serial: Option[PositiveInt] = None,
   )(implicit traceContext: TraceContext): Future[Unit] =
     // We make two transactions - one to add new keys one to remove old keys - to ensure overlap and a smooth transition.
     // S.a. Canton's `rotate_key`
@@ -466,7 +465,7 @@ abstract class TopologyAdminConnection(
               proposeOwnerToKeyMapping(
                 member,
                 (keys ++ mapping.mapping.keys).distinct,
-                serial.getOrElse(mapping.base.serial + PositiveInt.one),
+                mapping.base.serial + PositiveInt.one,
               )
           }).map(_ => ()),
         logger,
@@ -491,7 +490,7 @@ abstract class TopologyAdminConnection(
           proposeOwnerToKeyMapping(
             member,
             keys,
-            serial.getOrElse(mapping.base.serial + PositiveInt.one),
+            mapping.base.serial + PositiveInt.one,
           )
             .map(_ => ()),
         logger,

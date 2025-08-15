@@ -6,7 +6,7 @@ package org.lfdecentralizedtrust.splice.setup
 import cats.implicits.showInterpolator
 import com.daml.nonempty.NonEmpty
 import com.digitalasset.canton.admin.api.client.data.{NodeStatus, WaitingForId}
-import com.digitalasset.canton.crypto.{SigningKeyUsage, SigningPublicKey}
+import com.digitalasset.canton.crypto.{EncryptionPublicKey, SigningKeyUsage, SigningPublicKey}
 import com.digitalasset.canton.logging.{NamedLoggerFactory, NamedLogging}
 import com.digitalasset.canton.topology.store.TimeQuery
 import com.digitalasset.canton.topology.store.TopologyStoreId.AuthorizedStore
@@ -335,50 +335,37 @@ class NodeInitializer(
         .getOrElse(throw new IllegalStateException("ownerToKeyMappingHistory is empty."))
         .mapping
         .keys
-        .filter {
-          case _: SigningPublicKey => true
-          case _ => false
-        }
-      _ = ownerToKeyMappingHistory.map { otk =>
-        val toRotate = otk.base.signedBy.diff(latestKeys.map(_.id))
-        val toKeep = otk.base.signedBy.diff(toRotate)
-        // rotate keys that have not signed the OTK transaction
-        val keysToRotate =
-          otk.mapping.keys.filter {
-            case k: SigningPublicKey => toRotate.contains(k.id)
-            case _ => false
-          }
-        // keep keys that have signed the OTK transaction
-        val keysToKeep =
-          otk.mapping.keys.filter {
-            case k: SigningPublicKey => toKeep.contains(k.id)
-            case _ => true
-          }
-        logger.info(s"keysToKeep: ${keysToKeep}")
-        if (keysToRotate.nonEmpty) {
-          logger.info(s"keyToRotate: ${keysToRotate}")
-          val newKeys = keysToRotate.flatMap {
-            case key: SigningPublicKey =>
-              Some(connection.generateKeyPair(key.keySpec.name, key.usage))
-            case _ => None
-          }
-          for {
-            rotatedKeys <- Future.sequence(newKeys)
-            allKeys = (keysToKeep ++ rotatedKeys).distinct
-            _ <- connection.ensureOwnerToKeyMapping(
-              member = nodeIdentity(id),
-              keys = NonEmpty.mk(
-                Seq,
-                allKeys.headOption.getOrElse(throw new IllegalStateException("allKeys are empty.")),
-                allKeys.drop(1)*
-              ),
-              retryFor = RetryFor.Automation,
-              serial = Some(otk.base.serial),
+        .forgetNE
+      allSignedBy = ownerToKeyMappingHistory.flatMap(_.base.signedBy).toSet
+      (toKeep, toRotate) = allSignedBy.partition(latestKeys.map(_.id).contains)
+      _ = if (toRotate.nonEmpty) {
+        logger.info(s"keyToRotate: ${toRotate}")
+        val rotatedKeys = latestKeys.map {
+          case key: SigningPublicKey if toRotate.contains(key.id) || !toKeep.contains(key.id) =>
+            connection.generateKeyPair(
+              key.keySpec.name,
+              key.usage,
             )
-          } yield logger.info(
-            s"Rotating OTK mapping keys that did not sign the OTK topology transaction for member=${otk.mapping.member} and serial=${otk.base.serial}."
-          )
+          case key: EncryptionPublicKey if toRotate.contains(key.id) || !toKeep.contains(key.id) =>
+            connection.generateEncryptionKeyPair(
+              key.keySpec.name
+            )
+          case key => Future.successful(key)
         }
+        for {
+          newKeys <- Future.sequence(rotatedKeys)
+          _ <- connection.ensureOwnerToKeyMapping(
+            member = nodeIdentity(id),
+            keys = NonEmpty.mk(
+              Seq,
+              newKeys.headOption.getOrElse(throw new IllegalStateException("newKeys is empty.")),
+              newKeys.drop(1)*
+            ),
+            retryFor = RetryFor.Automation,
+          )
+        } yield logger.info(
+          s"Rotating OTK mapping keys that did not sign the OTK topology transaction."
+        )
       }
     } yield ()
 

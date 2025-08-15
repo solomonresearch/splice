@@ -21,6 +21,7 @@ org.lfdecentralizedtrust.splice.integration.tests.ScanHistoryBackfillingIntegrat
 org.lfdecentralizedtrust.splice.integration.tests.ScanIntegrationTest
 org.lfdecentralizedtrust.splice.integration.tests.ScanTxLogOwnerExpireLockIntegrationTest
 org.lfdecentralizedtrust.splice.integration.tests.SequencerPruningIntegrationTest
+org.lfdecentralizedtrust.splice.integration.tests.SigningKeysIntegrationTest
 org.lfdecentralizedtrust.splice.integration.tests.SplitwellIntegrationTest
 org.lfdecentralizedtrust.splice.integration.tests.SplitwellUpgradeIntegrationTest
 org.lfdecentralizedtrust.splice.integration.tests.SvDevNetReonboardingIntegrationTest
