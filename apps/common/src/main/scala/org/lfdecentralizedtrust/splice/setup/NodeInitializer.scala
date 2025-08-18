@@ -319,7 +319,6 @@ class NodeInitializer(
       _ = logger.info(s"AuthorizedStore snapshot is imported")
     } yield ()
 
-  // ensures that all OTK mappings are signed by the latest keys and all keys they list
   private def rotateOwnerToKeyMappingNotSignedByKeys(
       id: UniqueIdentifier,
       nodeIdentity: UniqueIdentifier => Member & NodeIdentity,
@@ -335,18 +334,21 @@ class NodeInitializer(
         .getOrElse(throw new IllegalStateException("ownerToKeyMappingHistory is empty."))
         .mapping
         .keys
-        .forgetNE
-      allSignedBy = ownerToKeyMappingHistory.flatMap(_.base.signedBy).toSet
-      (toKeep, toRotate) = allSignedBy.partition(latestKeys.map(_.id).contains)
+        .filter {
+          case _: SigningPublicKey => true
+          case _ => false
+        }
+      allSignedBy = ownerToKeyMappingHistory.flatMap(_.base.signedBy).distinct
+      (_, toRotate) = latestKeys.map(_.id).partition(allSignedBy.contains)
       _ = if (toRotate.nonEmpty) {
         logger.info(s"keyToRotate: ${toRotate}")
         val rotatedKeys = latestKeys.map {
-          case key: SigningPublicKey if toRotate.contains(key.id) || !toKeep.contains(key.id) =>
+          case key: SigningPublicKey if toRotate.contains(key.id) =>
             connection.generateKeyPair(
               key.keySpec.name,
               key.usage,
             )
-          case key: EncryptionPublicKey if toRotate.contains(key.id) || !toKeep.contains(key.id) =>
+          case key: EncryptionPublicKey if toRotate.contains(key.id) =>
             connection.generateEncryptionKeyPair(
               key.keySpec.name
             )
