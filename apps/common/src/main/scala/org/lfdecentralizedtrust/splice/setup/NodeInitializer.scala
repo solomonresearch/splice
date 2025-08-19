@@ -340,6 +340,9 @@ class NodeInitializer(
         }
       allSignedBy = ownerToKeyMappingHistory.flatMap(_.base.signedBy).distinct
       (_, toRotate) = latestKeys.map(_.id).partition(allSignedBy.contains)
+      _ = logger.info(
+        s"Keys that are not signed by the owner: ${toRotate.mkString(", ")}"
+      )
       _ = if (toRotate.nonEmpty) {
         logger.info(s"keyToRotate: ${toRotate}")
         val rotatedKeys = latestKeys.map {
