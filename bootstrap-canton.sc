@@ -17,7 +17,10 @@ import com.digitalasset.canton.topology.transaction.SignedTopologyTransaction.Ge
 import com.digitalasset.canton.topology.transaction.TopologyChangeOp
 import com.digitalasset.canton.version.ProtocolVersion
 import com.digitalasset.canton.console.commands.TopologyAdministrationGroup
-import com.digitalasset.canton.topology.store.{StoredTopologyTransaction, StoredTopologyTransactions}
+import com.digitalasset.canton.topology.store.{
+  StoredTopologyTransaction,
+  StoredTopologyTransactions,
+}
 import com.digitalasset.canton.topology.processing.{EffectiveTime, SequencedTime}
 import com.digitalasset.canton.sequencing.SequencerConnectionValidation
 import com.digitalasset.canton.discard.Implicits.DiscardOps
@@ -31,7 +34,8 @@ val domainParametersConfig = SynchronizerParametersConfig(
 def dropSignatures(tx: GenericSignedTopologyTransaction): GenericSignedTopologyTransaction = {
   tx.transaction.mapping match {
     case OwnerToKeyMapping(member, _) =>
-      val signaturesToRemove = tx.signatures.forgetNE.filter(_.signedBy != member.namespace.fingerprint).map(_.signedBy)
+      val signaturesToRemove =
+        tx.signatures.forgetNE.filter(_.signedBy != member.namespace.fingerprint).map(_.signedBy)
       tx.removeSignatures(signaturesToRemove).get
     case _ => tx
   }
@@ -43,11 +47,12 @@ def staticParameters(sequencer: LocalInstanceReference) =
     .map(StaticSynchronizerParameters(_))
     .getOrElse(sys.error("whatever"))
 
+// FIXME: replace this by original code and put that into a separate file or under new flag
 def bootstrapOtherDomain(
     name: String,
     sequencer: LocalSequencerReference,
     mediator: LocalMediatorReference,
-    extraParticipant : LocalInstanceReference,
+    extraParticipant: LocalInstanceReference,
 ) = {
   // first synchronizer method
   val synchronizerName = name
@@ -114,7 +119,8 @@ def bootstrapOtherDomain(
     .mapFilter(_.selectOp[TopologyChangeOp.Replace])
     .distinct
 
-  val merged = SignedTopologyTransactions.compact(initialTopologyState).map(_.updateIsProposal(false))
+  val merged =
+    SignedTopologyTransactions.compact(initialTopologyState).map(_.updateIsProposal(false))
 
   val storedTopologySnapshot = StoredTopologyTransactions[TopologyChangeOp, TopologyMapping](
     merged.map(stored =>
