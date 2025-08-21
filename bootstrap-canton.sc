@@ -34,17 +34,119 @@ def bootstrapOtherDomain(
     sequencer: LocalSequencerReference,
     mediator: LocalMediatorReference,
 ) = {
-  bootstrap.synchronizer(
-    name,
-    synchronizerOwners = Seq(sequencer),
-    sequencers = Seq(sequencer),
-    mediators = Seq(mediator),
-    synchronizerThreshold = PositiveInt.one,
-    staticSynchronizerParameters = staticParameters(sequencer),
+  // first synchronizer method
+  val synchronizerName = name
+  val mediatorsToSequencers = Seq(mediator).map(_ -> (Seq(sequencer), PositiveInt.one)).toMap
+  val synchronizerThreshold = PositiveInt.one
+  val staticSynchronizerParameters = staticParameters(sequencer)
+  val mediatorRequestAmplification = SubmissionRequestAmplification.NoAmplification
+
+  // second synchronizer method
+  val sequencers =
+    Seq(sequencer).groupBy(_.id).flatMap(_._2.headOption.toList).toList
+  val synchronizerOwners =
+    if (Seq(sequencer).isEmpty) Seq(sequencer) else Seq(sequencer)
+  val mediators = mediatorsToSequencers.keys.toSeq
+
+  // run bootstrap method
+  val synchronizerNamespace =
+    DecentralizedNamespaceDefinition.computeNamespace(synchronizerOwners.map(_.namespace).toSet)
+  val synchronizerId = SynchronizerId(
+    UniqueIdentifier.tryCreate(synchronizerName, synchronizerNamespace)
   )
+
+  val tempStoreForBootstrap = synchronizerOwners
+    .map(
+      _.topology.stores.create_temporary_topology_store(
+        s"$synchronizerName-setup",
+        staticSynchronizerParameters.protocolVersion,
+      )
+    )
+    .headOption
+    .getOrElse(sys.error("No synchronizer owners specified."))
+
+  val identityTransactions =
+    (sequencers ++ mediators ++ synchronizerOwners).flatMap(
+      _.topology.transactions.identity_transactions()
+    )
+
+  synchronizerOwners.foreach(
+    _.topology.transactions.load(
+      identityTransactions,
+      store = tempStoreForBootstrap,
+      ForceFlag.AlienMember,
+    )
+  )
+
+  val (_, foundingTxs) =
+    bootstrap.decentralized_namespace(
+      synchronizerOwners,
+      synchronizerThreshold,
+      store = tempStoreForBootstrap,
+    )
+
+  val synchronizerGenesisTxs = synchronizerOwners.flatMap(
+    _.topology.synchronizer_bootstrap.generate_genesis_topology(
+      synchronizerId,
+      synchronizerOwners.map(_.id.member),
+      sequencers.map(_.id),
+      mediators.map(_.id),
+      store = tempStoreForBootstrap,
+    )
+  )
+
+  val initialTopologyState = (identityTransactions ++ foundingTxs ++ synchronizerGenesisTxs)
+    .mapFilter(_.selectOp[TopologyChangeOp.Replace])
+    .distinct
+
+  val merged =
+    TopologyAdministrationGroup.merge(initialTopologyState, updateIsProposal = Some(false))
+
+  val storedTopologySnapshot = StoredTopologyTransactions[TopologyChangeOp, TopologyMapping](
+    merged.map(stored =>
+      StoredTopologyTransaction(
+        sequenced = SequencedTime(SignedTopologyTransaction.InitialTopologySequencingTime),
+        validFrom = EffectiveTime(SignedTopologyTransaction.InitialTopologySequencingTime),
+        validUntil = None,
+        transaction = stored,
+        rejectionReason = None,
+      )
+    )
+  ).toByteString(staticSynchronizerParameters.protocolVersion)
+
+  sequencers
+    .filterNot(_.health.initialized())
+    .foreach(x =>
+      x.setup
+        .assign_from_genesis_state(storedTopologySnapshot, staticSynchronizerParameters)
+        .discard
+    )
+
+  mediatorsToSequencers
+    .filter(!_._1.health.initialized())
+    .foreach { case (mediator, (mediatorSequencers, threshold)) =>
+      mediator.setup.assign(
+        synchronizerId,
+        SequencerConnections.tryMany(
+          mediatorSequencers
+            .map(s => s.sequencerConnection.withAlias(SequencerAlias.tryCreate(s.name))),
+          threshold,
+          mediatorRequestAmplification,
+        ),
+        // if we run bootstrap ourselves, we should have been able to reach the nodes
+        // so we don't want the bootstrapping to fail spuriously here in the middle of
+        // the setup
+        SequencerConnectionValidation.Disabled,
+      )
+    }
+
+  synchronizerOwners.foreach(
+    _.topology.stores.drop_temporary_topology_store(tempStoreForBootstrap)
+  )
+
   // For some stupid reason bootstrap.domain does not allow changing the dynamic domain parameters
   // so we overwrite it here.
-  val synchronizerId = sequencer.synchronizer_id
+  // val synchronizerId = sequencer.synchronizer_id
   // Align the reconciliation interval and catchup config with what our triggers set.
   // This doesn't really matter for splitwell but it matters for the soft synchronizer upgrade test.
   sequencer.topology.synchronizer_parameters.propose_update(
