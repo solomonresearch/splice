@@ -28,6 +28,15 @@ val domainParametersConfig = SynchronizerParametersConfig(
   alphaVersionSupport = true
 )
 
+def dropSignatures(tx: GenericSignedTopologyTransaction): GenericSignedTopologyTransaction = {
+  tx.transaction.mapping match {
+    case OwnerToKeyMapping(member, _) =>
+      val signaturesToRemove = tx.signatures.forgetNE.filter(_.signedBy != member.namespace.fingerprint).map(_.signedBy)
+      tx.removeSignatures(signaturesToRemove).get
+    case _ => tx
+  }
+}
+
 def staticParameters(sequencer: LocalInstanceReference) =
   domainParametersConfig
     .toStaticSynchronizerParameters(sequencer.config.crypto, ProtocolVersion.v33)
@@ -38,6 +47,7 @@ def bootstrapOtherDomain(
     name: String,
     sequencer: LocalSequencerReference,
     mediator: LocalMediatorReference,
+    extraParticipant : LocalInstanceReference,
 ) = {
   // first synchronizer method
   val synchronizerName = name
@@ -70,7 +80,7 @@ def bootstrapOtherDomain(
     .getOrElse(sys.error("No synchronizer owners specified."))
 
   val identityTransactions =
-    (sequencers ++ mediators ++ synchronizerOwners).flatMap(
+    (sequencers ++ mediators ++ synchronizerOwners ++ Seq(extraParticipant)).flatMap(
       _.topology.transactions.identity_transactions()
     )
 
@@ -112,13 +122,12 @@ def bootstrapOtherDomain(
         sequenced = SequencedTime(SignedTopologyTransaction.InitialTopologySequencingTime),
         validFrom = EffectiveTime(SignedTopologyTransaction.InitialTopologySequencingTime),
         validUntil = None,
-        transaction = stored,
+        transaction = dropSignatures(stored),
         rejectionReason = None,
       )
     )
   ).toByteString(staticSynchronizerParameters.protocolVersion)
 
-  // FIXME: remove the extra signatures
   sequencers
     .filterNot(_.health.initialized())
     .foreach(x =>
@@ -150,7 +159,7 @@ def bootstrapOtherDomain(
   )
 }
 
-bootstrapOtherDomain("global-domain", globalSequencerSv1, globalMediatorSv1)
+bootstrapOtherDomain("global-domain", globalSequencerSv1, globalMediatorSv1, aliceParticipant)
 
 // These user allocations are only there
 // for local testing. Our tests allocate their own users.
