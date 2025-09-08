@@ -131,13 +131,20 @@ class RewardExpiryIntegrationTest extends IntegrationTest with TriggerTestUtil {
     )(
       "Amulet rules is created in new package id",
       _ => {
-        sv1ScanBackend
+        val amuletRules = sv1ScanBackend
           .getAmuletRules()
+        amuletRules
           .contract
           .identifier
           .getPackageId shouldBe DarResources.amulet.bootstrap.packageId
+        DarResources.amulet.bootstrap.packageId should not be DarResources.amulet_0_1_9.packageId
       },
     )
+      aliceValidatorBackend.participantClient.ledger_api_extensions.acs
+        .filterJava(ValidatorLivenessActivityRecord.COMPANION)(
+          aliceValidatorBackend.getValidatorPartyId(),
+          _.data.round.number == 0,
+        ) should have size(1)
     sv1Backend.dsoDelegateBasedAutomation
       .trigger[ExpireRewardCouponsTrigger]
       .resume()
